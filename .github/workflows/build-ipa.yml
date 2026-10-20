@@ -50,6 +50,7 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
+            TARGETED_DEVICE_FAMILY=1 \
             ARCHS=arm64 ONLY_ACTIVE_ARCH=NO build \
             2>&1 | tee "$RUNNER_TEMP/hotspot-output/xcodebuild.log"
 
