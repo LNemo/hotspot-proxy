@@ -19,7 +19,7 @@ struct ProxyDiagnostics {
 private func diagnosticErrorDescription(_ error: NWError) -> String {
     switch error {
     case .posix(let code): return "POSIX code \(code.rawValue)"
-    case .dns(let code): return "DNS code \(code.rawValue)"
+    case .dns(let code): return "DNS code \(code)"
     case .tls(let status): return "TLS code \(status)"
     @unknown default: return "Network error"
     }
