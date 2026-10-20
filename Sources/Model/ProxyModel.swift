@@ -13,6 +13,13 @@ final class ProxyModel: ObservableObject {
     @Published var error: String?
     @Published var addresses: [(String, String)] = []
     @Published var startedAt: Date?
+    @Published var listenerReady = false
+    @Published var listenerStatus = "Stopped"
+    @Published var acceptedConnections: UInt64 = 0
+    @Published var diagnosticEvents: [String] = []
+    @Published var localCheck = "Not tested"
+    @Published var checkingLocal = false
+    private var localProbe: LocalProxyProbe?
 
     private let server = ProxyServer()
     private let keepAlive = KeepAlive()
@@ -24,12 +31,28 @@ final class ProxyModel: ObservableObject {
     init() {
         let args = ProcessInfo.processInfo.arguments
         demo = args.contains("-uiDemo") || args.contains("-uiDemoNoHotspot")
-        server.onStats = { [weak self] n, b in Task { @MainActor in self?.connections = n; self?.bytes = b } }
-        server.onState = { [weak self] e in
-            Task { @MainActor in
+        server.onStats = { [weak self] n, b in DispatchQueue.main.async { self?.connections = n; self?.bytes = b } }
+        server.onDiagnostics = { [weak self] diagnostics in
+            DispatchQueue.main.async {
                 guard let self else { return }
-                self.error = e
-                if e != nil { self.running = false; self.startedAt = nil }
+                self.acceptedConnections = diagnostics.acceptedConnections
+                self.diagnosticEvents = diagnostics.events
+                self.listenerReady = false
+                switch diagnostics.state {
+                case .stopped: self.listenerStatus = "Stopped"
+                case .starting: self.listenerStatus = "Starting"
+                case .ready:
+                    self.listenerReady = true
+                    self.listenerStatus = "Ready (accepting TCP)"
+                    self.error = nil
+                case .waiting(let reason): self.listenerStatus = "Waiting: \(reason)"
+                case .failed(let reason):
+                    self.listenerStatus = "Failed: \(reason)"
+                    self.error = reason
+                    self.running = false
+                    self.startedAt = nil
+                    self.keepAlive.stop()
+                }
                 self.publishSnapshot()
             }
         }
@@ -37,6 +60,7 @@ final class ProxyModel: ObservableObject {
             running = true; startedAt = .now.addingTimeInterval(-412)
             addresses = [("pdp_ip0", "10.44.1.7")]
         } else if args.contains("-uiDemo") {
+            listenerReady = true; listenerStatus = "Ready (demo)"
             running = true; connections = 3; bytes = 48_300_000
             startedAt = .now.addingTimeInterval(-3725)
             addresses = [("bridge100", "172.20.10.1"), ("en0", "192.168.0.12"), ("pdp_ip0", "10.44.1.7")]
@@ -47,12 +71,13 @@ final class ProxyModel: ObservableObject {
         publishSnapshot()
     }
 
-    var hotspotIP: String? { addresses.first { $0.0.hasPrefix("bridge") }?.1 }
+    var hotspotIP: String? { addresses.first { $0.0.hasPrefix("bridge") && !$0.1.contains(":") }?.1 }
     var endpoint: String? { hotspotIP.map { "\($0):\(port)" } }
 
     var status: ProxySnapshot.Status {
         if error != nil { return .error }
         if !running { return .stopped }
+        if !listenerReady { return .starting }
         if hotspotIP == nil { return .noHotspot }
         return .running
     }
@@ -77,6 +102,11 @@ final class ProxyModel: ObservableObject {
 
     func start() {
         error = nil
+        listenerReady = demo
+        listenerStatus = demo ? "Ready (demo)" : "Starting"
+        acceptedConnections = 0
+        diagnosticEvents = []
+        localCheck = "Not tested"
         if !demo {
             server.start(port: UInt16(clamping: port))
             keepAlive.start()
@@ -87,6 +117,7 @@ final class ProxyModel: ObservableObject {
     }
 
     func stop() {
+        listenerReady = false
         if !demo {
             server.stop()
             keepAlive.stop()
@@ -139,13 +170,43 @@ final class ProxyModel: ObservableObject {
         guard getifaddrs(&ifap) == 0, let first = ifap else { return }
         defer { freeifaddrs(ifap) }
         for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            guard let sa = p.pointee.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
+            guard let sa = p.pointee.ifa_addr,
+                  sa.pointee.sa_family == UInt8(AF_INET) || sa.pointee.sa_family == UInt8(AF_INET6) else { continue }
             let name = String(cString: p.pointee.ifa_name)
             guard name != "lo0" else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
             out.append((name, String(cString: host)))
         }
-        addresses = out.sorted { ($0.0.hasPrefix("bridge") ? 0 : 1) < ($1.0.hasPrefix("bridge") ? 0 : 1) }
+        addresses = out.sorted {
+            let left = ($0.0.hasPrefix("bridge") ? 0 : 1, $0.1.contains(":") ? 1 : 0, $0.0, $0.1)
+            let right = ($1.0.hasPrefix("bridge") ? 0 : 1, $1.1.contains(":") ? 1 : 0, $1.0, $1.1)
+            return left < right
+        }
+    }
+
+    func checkLocalServer() {
+        guard !checkingLocal else { return }
+        checkingLocal = true
+        localCheck = "Checking 127.0.0.1:\(port)…"
+        let probe = LocalProxyProbe()
+        localProbe = probe
+        probe.start(port: UInt16(clamping: port)) { [weak self] result in
+            Task { @MainActor in
+                self?.localCheck = result
+                self?.checkingLocal = false
+                self?.localProbe = nil
+            }
+        }
+    }
+
+    var diagnosticReport: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        return (["Hotspot Proxy \(info["CFBundleShortVersionString"] ?? "?") (\(info["CFBundleVersion"] ?? "?"))",
+                 "iOS \(UIDevice.current.systemVersion)", "Listener: \(listenerStatus)",
+                 "Port: \(port)", "Accepted since start: \(acceptedConnections)",
+                 "Local check: \(localCheck)", "Interfaces:"]
+                + addresses.map { "\($0.0): \($0.1)" }
+                + ["Recent events:"] + diagnosticEvents).joined(separator: "\n")
     }
 }

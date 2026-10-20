@@ -10,6 +10,7 @@ extension Color {
 extension ProxySnapshot.Status {
     var color: Color {
         switch self {
+        case .starting: .signalWarn
         case .running: .signalOn
         case .noHotspot: .signalWarn
         case .stopped: .signalOff
@@ -19,6 +20,7 @@ extension ProxySnapshot.Status {
 
     var symbol: String {
         switch self {
+        case .starting: "hourglass"
         case .running: "personalhotspot"
         case .noHotspot: "personalhotspot.slash"
         case .stopped: "pause.circle"
@@ -28,6 +30,7 @@ extension ProxySnapshot.Status {
 
     var title: String {
         switch self {
+        case .starting: "Proxy Not Ready"
         case .running: "Proxy Running"
         case .noHotspot: "Hotspot Off"
         case .stopped: "Proxy Off"
@@ -37,6 +40,7 @@ extension ProxySnapshot.Status {
 
     var shortTitle: String {
         switch self {
+        case .starting: "Not Ready"
         case .running: "Running"
         case .noHotspot: "Hotspot Off"
         case .stopped: "Off"

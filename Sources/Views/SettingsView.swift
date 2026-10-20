@@ -48,16 +48,17 @@ struct SettingsView: View {
                     if m.addresses.isEmpty {
                         Text("No active network interfaces").foregroundStyle(.secondary)
                     }
-                    ForEach(m.addresses, id: \.0) { a in
+                    ForEach(Array(m.addresses.enumerated()), id: \.offset) { _, a in
                         CopyableRow(title: a.0.hasPrefix("bridge") ? "\(a.0) · Hotspot" : a.0, value: a.1)
                     }
                 } header: {
                     Text("Network Interfaces")
                 } footer: {
-                    Text("Interfaces starting with “bridge” are your Personal Hotspot. Other devices connect to that address.")
+                    Text("Bridge addresses are hotspot candidates. Open Connection Diagnostics to check whether this server is ready and receiving connections.")
                 }
 
                 Section("Help") {
+                    NavigationLink("Connection Diagnostics") { DiagnosticsView() }
                     NavigationLink { ConnectGuideView() } label: {
                         Label("Connect Other Devices", systemImage: "laptopcomputer.and.iphone")
                     }

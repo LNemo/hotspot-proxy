@@ -4,6 +4,7 @@ import Foundation
 /// The app save()s and reloads WidgetCenter on change; the widget only load()s.
 struct ProxySnapshot: Codable, Equatable {
     enum Status: String, Codable {
+        case starting     // listener has not reported ready (includes waiting)
         case running      // listener ready, hotspot on
         case noHotspot    // proxy on but no hotspot (bridge) interface
         case stopped      // stopped by the user

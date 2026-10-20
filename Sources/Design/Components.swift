@@ -82,6 +82,12 @@ struct StatusHero: View {
 
     @ViewBuilder private var content: some View {
         switch status {
+        case .starting:
+            Text("Waiting for the server")
+                .font(.title2.weight(.semibold))
+            Text("Open Connection Diagnostics below to see the actual listener state.")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
         case .running:
             if let endpoint {
                 Text(endpoint)

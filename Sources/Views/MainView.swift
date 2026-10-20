@@ -14,6 +14,22 @@ struct MainView: View {
                                onCopy: { m.copyEndpoint() }, onRetry: { m.start() })
                     PowerButton(running: m.running) { m.toggle() }
                     stats
+                    NavigationLink {
+                        DiagnosticsView()
+                    } label: {
+                        VStack(alignment: .leading, spacing: Space.s) {
+                            Label("Connection Diagnostics", systemImage: "stethoscope")
+                                .font(.headline)
+                            Text("\(m.listenerStatus) · Accepted: \(m.acceptedConnections)")
+                                .font(.footnote)
+                            Text("Diagnostic build 3")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: Radius.tile))
+                    }
+                    .buttonStyle(.plain)
                     guideLink
                 }
                 .padding(.horizontal, Space.l)

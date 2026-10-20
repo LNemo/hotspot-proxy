@@ -37,6 +37,14 @@ jobs:
           test -f HotspotProxy.xcodeproj/xcshareddata/xcschemes/HotspotProxy.xcscheme
           xcodebuild -list -project HotspotProxy.xcodeproj
 
+      - name: Test proxy diagnostics and relay on the macOS runner
+        run: |
+          set -euo pipefail
+          swiftc -target "$(uname -m)-apple-macosx15.0" \
+            Sources/ProxyServer.swift Sources/UdpRelay.swift Sources/LocalProxyProbe.swift Tests/ProxyServerSmoke.swift \
+            -o "$RUNNER_TEMP/hotspot-proxy-smoke"
+          "$RUNNER_TEMP/hotspot-proxy-smoke" | tee "$RUNNER_TEMP/hotspot-output/smoke-tests.txt"
+
       - name: Build Release device app and widget without signing
         run: |
           set -euo pipefail
