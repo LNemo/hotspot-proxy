@@ -1,0 +1,108 @@
+name: Build Hotspot Proxy IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Record toolchain and generate shared scheme
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/hotspot-output"
+          {
+            sw_vers
+            uname -m
+            xcodebuild -version
+            xcodebuild -showsdks
+            git rev-parse HEAD
+            echo "Runner image: ${ImageOS:-unknown} ${ImageVersion:-unknown}"
+          } | tee "$RUNNER_TEMP/hotspot-output/build-environment.txt"
+          if ! command -v xcodegen >/dev/null; then brew install xcodegen; fi
+          xcodegen --version | tee -a "$RUNNER_TEMP/hotspot-output/build-environment.txt"
+          xcodegen generate --spec ci-project.yml
+          test -f HotspotProxy.xcodeproj/xcshareddata/xcschemes/HotspotProxy.xcscheme
+          xcodebuild -list -project HotspotProxy.xcodeproj
+
+      - name: Build Release device app and widget without signing
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project HotspotProxy.xcodeproj \
+            -scheme HotspotProxy \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/hotspot-derived" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO build \
+            2>&1 | tee "$RUNNER_TEMP/hotspot-output/xcodebuild.log"
+
+      - name: Package and validate unsigned IPA
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/hotspot-derived/Build/Products/Release-iphoneos/HotspotProxy.app"
+          widget="$app/PlugIns/HotspotProxyWidget.appex"
+          for bundle in "$app" "$widget"; do
+            if codesign -dv "$bundle" 2>"$RUNNER_TEMP/signature-check.txt"; then
+              echo "Unexpected signature on $bundle"; exit 1
+            fi
+            cat "$RUNNER_TEMP/signature-check.txt"
+            grep -q 'not signed at all' "$RUNNER_TEMP/signature-check.txt"
+          done
+          mkdir -p "$RUNNER_TEMP/hotspot-package/Payload"
+          ditto "$app" "$RUNNER_TEMP/hotspot-package/Payload/HotspotProxy.app"
+          (cd "$RUNNER_TEMP/hotspot-package" && zip -qry "$RUNNER_TEMP/hotspot-output/HotspotProxy-unsigned.ipa" Payload)
+          python3 scripts/verify-ipa.py "$RUNNER_TEMP/hotspot-output/HotspotProxy-unsigned.ipa" \
+            | tee "$RUNNER_TEMP/hotspot-output/ipa-verification.json"
+          shasum -a 256 "$RUNNER_TEMP/hotspot-output/HotspotProxy-unsigned.ipa" \
+            | tee "$RUNNER_TEMP/hotspot-output/SHA256SUMS.txt"
+
+      - name: Upload IPA
+        id: ipa
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: HotspotProxy-unsigned-ipa
+          path: ${{ runner.temp }}/hotspot-output/HotspotProxy-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload verification and build logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: HotspotProxy-build-evidence
+          path: |
+            ${{ runner.temp }}/hotspot-output/*.txt
+            ${{ runner.temp }}/hotspot-output/*.json
+            ${{ runner.temp }}/hotspot-output/*.log
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Summarize
+        env:
+          ARTIFACT_URL: ${{ steps.ipa.outputs.artifact-url }}
+        run: |
+          {
+            echo "IPA: $ARTIFACT_URL"
+            echo 'Unsigned arm64 iPhoneOS app and widget, iOS 17.0+. Re-signing is required before installation.'
+            echo 'App Group must match the signed entitlements and SharedStore.appGroup. Physical device installation and widget behavior are not tested.'
+            echo '```json'
+            cat "$RUNNER_TEMP/hotspot-output/ipa-verification.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
